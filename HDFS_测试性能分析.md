@@ -110,3 +110,64 @@ Hadoop对单个文件都是顺序流式读写，所以节点间要等待。
 
 ![1523871366690](/1523871366690.png)
 
+# 跟踪读block
+
+文件只有128M，即只有一个block大小，而且map task是分配至locality DataNode，却要读10秒钟。
+
+```
+2018-04-17 10:10:31,068 INFO [main] org.apache.hadoop.mapred.MapTask: Processing split: hdfs://hadoop2:9000/benchmarks/TestDFSIO/io_control/in_file_test_io_100:0+114
+2018-04-17 10:10:31,122 INFO [main] org.apache.hadoop.mapred.MapTask: numReduceTasks: 1
+2018-04-17 10:10:31,185 INFO [main] org.apache.hadoop.mapred.MapTask: (EQUATOR) 0 kvi 26214396(104857584)
+2018-04-17 10:10:31,185 INFO [main] org.apache.hadoop.mapred.MapTask: mapreduce.task.io.sort.mb: 100
+2018-04-17 10:10:31,185 INFO [main] org.apache.hadoop.mapred.MapTask: soft limit at 83886080
+2018-04-17 10:10:31,185 INFO [main] org.apache.hadoop.mapred.MapTask: bufstart = 0; bufvoid = 104857600
+2018-04-17 10:10:31,185 INFO [main] org.apache.hadoop.mapred.MapTask: kvstart = 26214396; length = 6553600
+2018-04-17 10:10:31,190 INFO [main] org.apache.hadoop.mapred.MapTask: Map output collector class = org.apache.hadoop.mapred.MapTask$MapOutputBuffer
+2018-04-17 10:10:31,212 INFO [main] org.apache.hadoop.fs.TestDFSIO: in = org.apache.hadoop.hdfs.client.HdfsDataInputStream
+2018-04-17 10:10:41,360 INFO [main] org.apache.hadoop.fs.TestDFSIO: Number of bytes processed = 134217728
+2018-04-17 10:10:41,360 INFO [main] org.apache.hadoop.fs.TestDFSIO: Exec time = 10147
+2018-04-17 10:10:41,360 INFO [main] org.apache.hadoop.fs.TestDFSIO: IO rate = 12.614566
+2018-04-17 10:10:41,363 INFO [main] org.apache.hadoop.mapred.MapTask: Starting flush of map output
+2018-04-17 10:10:41,363 INFO [main] org.apache.hadoop.mapred.MapTask: Spilling map output
+```
+
+
+
+对比读时间，没有明显的规律性，有些先打开读InputStream的，反而要等很久才执行完
+
+```
+2018-04-17 10:30org.apache.hadoop.mapred.MapTask: bufstart = 0; bufvoid = 104857600
+2018-04-17 10:30org.apache.hadoop.mapred.MapTask: kvstart = 26214396; length = 6553600
+2018-04-17 10:30org.apache.hadoop.mapred.MapTask: Map output collector class = org.apache.hadoop.mapred.MapTask$MapOutputBuffer
+2018-04-17 10:30org.apache.hadoop.fs.TestDFSIO: in = org.apache.hadoop.hdfs.client.HdfsDataInputStream
+2018-04-17 10:30org.apache.hadoop.fs.TestDFSIO: Number of bytes processed = 134217728
+2018-04-17 10:30org.apache.hadoop.fs.TestDFSIO: Exec time = 35667
+2018-04-17 10:30org.apache.hadoop.fs.TestDFSIO: IO rate = 3.5887516
+```
+
+而有些后打开InputStream的反而立刻执行
+
+```
+org.apache.hadoop.mapred.MapTask: kvstart = 26214396; length = 6553600
+org.apache.hadoop.mapred.MapTask: Map output collector class = org.apache.hadoop.mapred.MapTask$MapOutputBuffer
+org.apache.hadoop.fs.TestDFSIO: in = org.apache.hadoop.hdfs.client.HdfsDataInputStream
+org.apache.hadoop.fs.TestDFSIO: Number of bytes processed = 134217728
+org.apache.hadoop.fs.TestDFSIO: Exec time = 897
+org.apache.hadoop.fs.TestDFSIO: IO rate = 142.69788
+org.apache.hadoop.mapred.MapTask: Starting flush of map output
+org.apache.hadoop.mapred.MapTask: Spilling map output
+```
+
+
+
+# HDF连续读与fio对比
+
+fio测试脚本如下，当bs=512k时，读IO达最大为170MB/s。即此HDD最大读IO。897
+
+```
+fio -filename=/mnt/sdb/test_fio -direct=1 -iodepth=8 -rw=read -ioengine=libaio -bs=4k -size=3G -numjobs=1 -runtime=60 -group_reporting -name=fiotest1 -thread
+```
+
+下图左边是HDFS的连续读。
+
+![1524027910525](/1524027910525.png)
