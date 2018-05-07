@@ -541,6 +541,59 @@ TODO
 
 使用FsImage查看追踪块存储位置等信息。
 
+# Hadoop Data Locality
+
+数据本地化的核心思想即是把计算移致数据所在的地方，而不是移动大量的数据。
+
+It’s important to note, that data locality is a best effort attempt, not a guarantee. 
+
+data locality is based only on the first HDFS block in the map task list of HDFS blocks to process。即第一块是本地读，Job Counters中的统计就认为这个map任务/读取的文件就是本地读
+
+```
+Job Counters 
+    Killed map tasks=2
+    Launched map tasks=502
+    Launched reduce tasks=1
+    Data-local map tasks=500
+    Rack-local map tasks=2
+```
+
+但目前测试有遇到两个问题，一个是map分布不均，一个是读的map并不是总是分配至数据所在的DataNode，示例如下 :
+
+| /     | node1 | node2 | node3 | node4 |
+| ----- | ----- | ----- | ----- | ----- |
+| write | 8     | 2     | 10    | 0     |
+| read  | 3     | 8     | 0     | 9     |
+
+相关的issue: https://issues.apache.org/jira/browse/YARN-6289
+
+数据本地化与Hadoop的调度器YARN有关联，YARN中有3种调度器可使用: FIFO、容量调度器(Capacity Scheduler)和公平调度器(Fair Scheduler)。其中，FIFO是最简单的，不需要任何配置。
+
+参考：HPE，本文同时说明如何查看本地读的trace log， https://community.hpe.com/t5/Around-the-Storage-Block/Data-Locality-in-Hadoop-Taking-a-Deep-Dive/ba-p/6969665#.WuRb_HWFPno
+
+## map分布不均匀
+
+## map并不总是分配至数据所在的DataNode
+
+理论上，使用replication机制时，总有一个DataNode包含一个文件的完整复本?
+
+## 分析本地读的方案
+
+* 跟踪YARN调度的详细日志: mapreduce.map.log.level=TRACE，(then collecting the logs using ‘yarn logs –applicationId’ command)
+* 寻找每个文件block是否本地读的统计信息。
+* 寻找每个map的分布的统计信息
+* Cloudera好像有提供monitoring功能，提供不少统计指标与信息
+
+```
+select reads_from_local_client_rate . reads_from_remote_client_rate, blocks_get_local_path_info_rate, blocks_read_rate
+
+reads_from_local_client_rate - contains all local reads without short-circuit
+
+reads_from_remote_client_rate - contains all remote reads, no separation between same rack vs different rack remote reads
+
+blocks_get_local_path_info_rate - contains all local short-circuit reads
+```
+
 # Spark
 
 Spark软件栈
@@ -868,12 +921,6 @@ LInux文件系统Buffer的申请速度随着申请内存量的增大而下降：
 
 ### mrbench
 
-
-
-### Spark
-
-### HBase
-
 ### 清除缓存
 
 1. 仅清除页面缓存（PageCache）
@@ -960,10 +1007,8 @@ TestDFSIO代码中硬写reduce个数为1，从log来看，这个reduce为1不是
 2018-04-13 03:07:45,725 INFO mapreduce.Job:  map 100% reduce 100%
 ```
 
-
-
-
-
 ## 第三方测试
 
 TODO
+
+
